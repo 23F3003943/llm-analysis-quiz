@@ -1,0 +1,10 @@
+﻿services:
+  - type: web
+    name: llm-analysis-quiz
+    env: docker
+    plan: free
+    dockerfilePath: Dockerfile
+    envVars:
+      - key: SECRET_VALUE
+        value: mysecret123
+    autoDeploy: true
