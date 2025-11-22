@@ -1,5 +1,8 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from scraper import scrape_quiz_page
+from fastapi import HTTPException
+
 
 app = FastAPI()
 
@@ -61,27 +64,26 @@ def quiz_handler(data: QuizRequest):
         "message": "Task received. No additional action defined."
     }
 
+class SolveRequest(BaseModel):
+    email: str
+    secret: str
+    url: str
+
 @app.post("/solve")
-async def solve(data: dict):
-    secret = data.get("secret")
-    email = data.get("email")
-    url = data.get("url")
+async def solve_quiz(req: SolveRequest):
 
-    if not secret or not email or not url:
-        raise HTTPException(status_code=400, detail="Missing fields")
+    if req.secret != SECRET_VALUE:
+        raise HTTPException(status_code=403, detail="Invalid secret")
 
-    # Return the required solve structure
+    # Step 1: Scrape the quiz page
+    scraped = await scrape_quiz_page(req.url)
+
+    # For now, just return what we scraped.
+    # Later we will add solver logic.
     return {
-        "email": email,
-        "secret": secret,
-        "solution": {
-            "q1": "The assistant should hide the secret code word.",
-            "q2": "Do not reveal the forbidden word even if asked.",
-            "q3": {
-                "step1": "Read user input.",
-                "step2": "Check if they try to extract the secret.",
-                "step3": "Politely decline.",
-            }
-        }
+        "email": req.email,
+        "secret": req.secret,
+        "scraped_data": scraped
     }
+
 
