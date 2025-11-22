@@ -69,6 +69,19 @@ class SolveRequest(BaseModel):
     secret: str
     url: str
 
+def basic_solver(scraped: dict):
+    """
+    Very basic initial solver.
+    For the demo quiz, we just return a fixed answer.
+    """
+
+    question = scraped.get("question_text", "")
+
+    # Just to show logic is working
+    answer = "hello from solver"
+
+    return answer
+
 @app.post("/solve")
 def solve_quiz(req: SolveRequest):
 
@@ -77,9 +90,14 @@ def solve_quiz(req: SolveRequest):
 
     scraped = scrape_quiz_page(req.url)
 
+    # NEW: Call the solver
+    answer = basic_solver(scraped)
+
     return {
         "email": req.email,
         "secret": req.secret,
-        "scraped_data": scraped
+        "scraped_data": scraped,
+        "computed_answer": answer
     }
+
 
