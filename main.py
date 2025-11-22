@@ -70,20 +70,16 @@ class SolveRequest(BaseModel):
     url: str
 
 @app.post("/solve")
-async def solve_quiz(req: SolveRequest):
+def solve_quiz(req: SolveRequest):
 
     if req.secret != SECRET_VALUE:
         raise HTTPException(status_code=403, detail="Invalid secret")
 
-    # Step 1: Scrape the quiz page
-    scraped = await scrape_quiz_page(req.url)
+    scraped = scrape_quiz_page(req.url)
 
-    # For now, just return what we scraped.
-    # Later we will add solver logic.
     return {
         "email": req.email,
         "secret": req.secret,
         "scraped_data": scraped
     }
-
 
