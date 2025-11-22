@@ -1,83 +1,74 @@
-import asyncio
-from playwright.async_api import async_playwright
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
 
-async def scrape_quiz_page(url: str):
+def scrape_quiz_page(url: str):
+    try:
+        print(f"🔎 Fetching quiz page: {url}")
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-    headless=False,
-    args=["--no-sandbox", "--disable-setuid-sandbox"]
-)
-        page = await browser.new_page()
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
 
-        print(f"🔎 Opening quiz page: {url}")
+        soup = BeautifulSoup(resp.text, "html.parser")
 
-        try:
-            await page.goto(url, timeout=60000, wait_until="networkidle")
-            await page.wait_for_timeout(3000)
+        # -------------------------------
+        # Extract main page text
+        # -------------------------------
+        body_text = soup.get_text(separator="\n").strip()
 
-            # -------------------------------------------
-            # 1. Try reading NORMAL body content
-            # -------------------------------------------
+        # -------------------------------
+        # Detect iframes containing quiz
+        # -------------------------------
+        full_text = body_text
+        file_links = []
+        submit_url = None
+
+        iframes = soup.find_all("iframe")
+        for iframe in iframes:
+            src = iframe.get("src")
+            if not src:
+                continue
+
+            iframe_url = urljoin(url, src)
+
             try:
-                body_text = await page.inner_text("body")
-            except:
-                body_text = ""
+                iframe_resp = requests.get(iframe_url, timeout=20)
+                iframe_resp.raise_for_status()
 
-            # -------------------------------------------
-            # 2. Check for IFRAMES (demo uses iframe!)
-            # -------------------------------------------
-            frames = page.frames
-            frame_text = ""
-            file_links = []
-            submit_url = None
+                iframe_soup = BeautifulSoup(iframe_resp.text, "html.parser")
 
-            for f in frames:
-                try:
-                    html = await f.content()
+                # Append iframe text
+                iframe_text = iframe_soup.get_text(separator="\n").strip()
+                full_text += "\n" + iframe_text
 
-                    # Extract visible text
-                    try:
-                        text = await f.inner_text("body")
-                    except:
-                        text = html
+                # Extract file links
+                for a in iframe_soup.find_all("a", href=True):
+                    href = a["href"]
+                    full_href = urljoin(iframe_url, href)
 
-                    frame_text += text + "\n"
+                    if any(ext in href for ext in ["pdf", "csv", "json", "xlsx"]):
+                        file_links.append(full_href)
 
-                    # Extract all links in this frame
-                    anchors = await f.query_selector_all("a")
-                    for a in anchors:
-                        href = await a.get_attribute("href")
-                        if href and ("pdf" in href or "csv" in href or "json" in href):
-                            file_links.append(href)
+                # Extract submit URL
+                for f in iframe_soup.find_all("form"):
+                    action = f.get("action")
+                    if action and "submit" in action:
+                        submit_url = urljoin(iframe_url, action)
 
-                    # Extract submit URL
-                    if "submit" in html:
-                        import re
-                        urls = re.findall(r'https?://\S+', html)
-                        for u in urls:
-                            if "submit" in u:
-                                submit_url = u
-                                break
-
-                except:
-                    continue
-
-            full_text = (body_text + "\n" + frame_text).strip()
-
-        except Exception as e:
-            await browser.close()
-            return {
-                "error": str(e),
-                "question_text": None,
-                "file_links": [],
-                "submit_url": None
-            }
-
-        await browser.close()
+            except Exception as e:
+                print("⚠️ iframe error:", e)
+                continue
 
         return {
-            "question_text": full_text[:8000],  # limit size
+            "question_text": full_text[:8000],
             "file_links": file_links,
             "submit_url": submit_url
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e),
+            "question_text": None,
+            "file_links": [],
+            "submit_url": None
         }
