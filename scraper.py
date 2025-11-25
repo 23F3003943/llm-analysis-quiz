@@ -6,17 +6,20 @@ from urllib.parse import urljoin
 
 def extract_submit_url(html: str, base_url: str):
     """
-    Detect submit URL patterns inside JS / JSON / script blocks.
+    Detect submit URL patterns inside JS / JSON / raw HTML.
+    Captures /submit even if broken across lines or surrounded by strange tags.
     """
+
     patterns = [
-        r'https://tds-llm-analysis\.s-anand\.net/submit\S*',
-        r'"submit"\s*:\s*"([^"]+)"',
-        r"'submit'\s*:\s*'([^']+)'",
-        r'POST this JSON to\s+(\S+)'
+        r'https://tds-llm-analysis\.s-anand\.net/submit',   # Full absolute URL
+        r'/submit',                                         # Any relative /submit
+        r'"submit"\s*:\s*"([^"]+)"',                        # JSON style
+        r"'submit'\s*:\s*'([^']+)'",                        # JSON with single quotes
+        r'POST this JSON to\s+(/submit)'                    # Demo page text
     ]
 
     for p in patterns:
-        match = re.search(p, html)
+        match = re.search(p, html, re.IGNORECASE)
         if match:
             url = match.group(1) if match.groups() else match.group(0)
             return urljoin(base_url, url)
@@ -73,7 +76,7 @@ def scrape_quiz_page(url: str):
         if not submit_url:
             submit_url = extract_submit_url(resp.text, url)
 
-        # --- CLEAN SUBMIT URL (important!) ---
+        # --- CLEAN SUBMIT URL (remove HTML junk) ---
         if submit_url:
             submit_url = submit_url.split("<")[0].strip()
             submit_url = submit_url.split('"')[0].strip()
