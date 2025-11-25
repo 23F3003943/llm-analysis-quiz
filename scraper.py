@@ -1,28 +1,42 @@
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+import re
+from urllib.parse import urljoin
+
+
+def extract_submit_url(html: str, base_url: str):
+    """
+    Detect submit URL patterns inside JS / JSON / script blocks.
+    """
+    patterns = [
+        r'https://tds-llm-analysis\.s-anand\.net/submit\S*',
+        r'"submit"\s*:\s*"([^"]+)"',
+        r"'submit'\s*:\s*'([^']+)'",
+        r'POST this JSON to\s+(\S+)'
+    ]
+
+    for p in patterns:
+        match = re.search(p, html)
+        if match:
+            url = match.group(1) if match.groups() else match.group(0)
+            return urljoin(base_url, url)
+
+    return None
+
 
 def scrape_quiz_page(url: str):
     try:
-        print(f"🔎 Fetching quiz page: {url}")
-
         resp = requests.get(url, timeout=20)
         resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "html.parser")
+        body_text = soup.get_text("\n").strip()
 
-        # -------------------------------
-        # Extract main page text
-        # -------------------------------
-        body_text = soup.get_text(separator="\n").strip()
-
-        # -------------------------------
-        # Detect iframes containing quiz
-        # -------------------------------
         full_text = body_text
         file_links = []
         submit_url = None
 
+        # --- Find iframes ---
         iframes = soup.find_all("iframe")
         for iframe in iframes:
             src = iframe.get("src")
@@ -35,29 +49,29 @@ def scrape_quiz_page(url: str):
                 iframe_resp = requests.get(iframe_url, timeout=20)
                 iframe_resp.raise_for_status()
 
-                iframe_soup = BeautifulSoup(iframe_resp.text, "html.parser")
+                iframe_html = iframe_resp.text
+                iframe_soup = BeautifulSoup(iframe_html, "html.parser")
 
-                # Append iframe text
-                iframe_text = iframe_soup.get_text(separator="\n").strip()
+                # Add iframe visible text
+                iframe_text = iframe_soup.get_text("\n").strip()
                 full_text += "\n" + iframe_text
 
-                # Extract file links
+                # ---- Detect submit URL inside iframe ----
+                if not submit_url:
+                    submit_url = extract_submit_url(iframe_html, iframe_url)
+
+                # ---- Extract downloadable file links ----
                 for a in iframe_soup.find_all("a", href=True):
-                    href = a["href"]
-                    full_href = urljoin(iframe_url, href)
+                    href = urljoin(iframe_url, a["href"])
+                    if any(ext in href for ext in ["csv", "pdf", "xlsx", "json"]):
+                        file_links.append(href)
 
-                    if any(ext in href for ext in ["pdf", "csv", "json", "xlsx"]):
-                        file_links.append(full_href)
-
-                # Extract submit URL
-                for f in iframe_soup.find_all("form"):
-                    action = f.get("action")
-                    if action and "submit" in action:
-                        submit_url = urljoin(iframe_url, action)
-
-            except Exception as e:
-                print("⚠️ iframe error:", e)
+            except Exception:
                 continue
+
+        # As fallback, detect submit URL in main page HTML
+        if not submit_url:
+            submit_url = extract_submit_url(resp.text, url)
 
         return {
             "question_text": full_text[:8000],
