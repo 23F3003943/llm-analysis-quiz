@@ -82,6 +82,27 @@ def basic_solver(scraped: dict):
 
     return answer
 
+def detect_question_type(text: str):
+    text_lower = text.lower()
+
+    # If file download task
+    if "download" in text_lower and ("csv" in text_lower or "pdf" in text_lower or "file" in text_lower):
+        return "file_task"
+
+    # If asking for sum or mean
+    if any(word in text_lower for word in ["sum", "total", "add", "mean", "average"]):
+        return "math_table"
+
+    # If asking for a text answer
+    if "what is" in text_lower or "extract" in text_lower:
+        return "text_question"
+
+    # If it's a demo style question
+    if "submit" in text_lower:
+        return "demo"
+
+    return "unknown"
+
 @app.post("/solve")
 def solve_quiz(req: SolveRequest):
 
