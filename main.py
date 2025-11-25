@@ -70,17 +70,18 @@ class SolveRequest(BaseModel):
     url: str
 
 def basic_solver(scraped: dict):
-    """
-    Very basic initial solver.
-    For the demo quiz, we just return a fixed answer.
-    """
+    text = scraped.get("question_text", "").lower()
 
-    question = scraped.get("question_text", "")
+    if "submit" in text:
+        return {
+            "question_type": "submit",
+            "answer": "auto-answer: submit detected"
+        }
 
-    # Just to show logic is working
-    answer = "hello from solver"
-
-    return answer
+    return {
+        "question_type": "generic",
+        "answer": "hello from solver"
+    }
 
 def detect_question_type(text: str):
     text_lower = text.lower()
@@ -118,7 +119,9 @@ def solve_quiz(req: SolveRequest):
     "email": req.email,
     "secret": req.secret,
     "scraped_data": scraped,
-    "question_type": qtype
+    "computed_answer": answer,   # <-- return solver result
+    "question_type": answer.get("question_type", "unknown")
 }
+
 
 
