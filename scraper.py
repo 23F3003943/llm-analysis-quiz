@@ -73,6 +73,13 @@ def scrape_quiz_page(url: str):
         if not submit_url:
             submit_url = extract_submit_url(resp.text, url)
 
+        # --- CLEAN SUBMIT URL (important!) ---
+        if submit_url:
+            submit_url = submit_url.split("<")[0].strip()
+            submit_url = submit_url.split('"')[0].strip()
+            submit_url = submit_url.split("'")[0].strip()
+            submit_url = submit_url.replace("&lt;", "").replace("&gt;", "")
+
         return {
             "question_text": full_text[:8000],
             "file_links": file_links,
