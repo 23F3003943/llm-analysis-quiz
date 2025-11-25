@@ -1,44 +1,39 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from scraper import scrape_quiz_page
-from fastapi import HTTPException
 
+# NEW SOLVERS
+from solver.file_solver import solve_file_question
+from solver.text_solver import solve_text_question
+from solver.submit_solver import submit_quiz
 
 app = FastAPI()
 
 # -------------------------
-# 1. YOUR SECRET VALUE
+# SECRET (STUDENT DEFINED)
 # -------------------------
-
-SECRET_VALUE = "mysecret123"   # <-- CHANGE THIS to any unique string you want
+SECRET_VALUE = "mysecret123"
 
 
 # -------------------------
-# 2. REQUEST MODEL
+# QUIZ ENDPOINT MODEL
 # -------------------------
-
 class QuizRequest(BaseModel):
     secret: str
     task: str
 
 
 # -------------------------
-# 3. MAIN QUIZ ENDPOINT
+# QUIZ ENDPOINT
 # -------------------------
-
 @app.post("/quiz")
 def quiz_handler(data: QuizRequest):
 
-    # 1) Check secret first
     if data.secret != SECRET_VALUE:
         return {"error": "Invalid secret"}
 
-    # 2) Now check which task is requested
     task = data.task.lower()
 
-    # -------------------------
-    # TASK 1: System Prompt
-    # -------------------------
     if "system prompt" in task:
         return {
             "system_prompt": (
@@ -47,9 +42,6 @@ def quiz_handler(data: QuizRequest):
             )
         }
 
-    # -------------------------
-    # TASK 2: User Prompt
-    # -------------------------
     if "user prompt" in task:
         return {
             "user_prompt": (
@@ -57,71 +49,86 @@ def quiz_handler(data: QuizRequest):
             )
         }
 
-    # -------------------------
-    # TASK 3: Any other test
-    # -------------------------
-    return {
-        "message": "Task received. No additional action defined."
-    }
+    return {"message": "Task received. No additional action defined."}
 
+
+# -------------------------
+# SOLVE ENDPOINT MODEL
+# -------------------------
 class SolveRequest(BaseModel):
     email: str
     secret: str
     url: str
 
-def basic_solver(scraped: dict):
-    text = scraped.get("question_text", "").lower()
 
-    if "submit" in text:
-        return {
-            "question_type": "submit",
-            "answer": "auto-answer: submit detected"
-        }
-
-    return {
-        "question_type": "generic",
-        "answer": "hello from solver"
-    }
-
+# -------------------------
+# QUESTION TYPE DETECTOR
+# -------------------------
 def detect_question_type(text: str):
-    text_lower = text.lower()
+    t = text.lower()
 
-    # If file download task
-    if "download" in text_lower and ("csv" in text_lower or "pdf" in text_lower or "file" in text_lower):
-        return "file_task"
+    if any(x in t for x in ["csv", "pdf", "download", "file"]):
+        return "file"
 
-    # If asking for sum or mean
-    if any(word in text_lower for word in ["sum", "total", "add", "mean", "average"]):
-        return "math_table"
+    if any(x in t for x in ["what is", "extract", "capital", "name"]):
+        return "text"
 
-    # If asking for a text answer
-    if "what is" in text_lower or "extract" in text_lower:
-        return "text_question"
-
-    # If it's a demo style question
-    if "submit" in text_lower:
+    if "submit" in t:
         return "demo"
 
     return "unknown"
 
+
+# -------------------------
+# SOLVE ENDPOINT
+# -------------------------
 @app.post("/solve")
 def solve_quiz(req: SolveRequest):
 
     if req.secret != SECRET_VALUE:
         raise HTTPException(status_code=403, detail="Invalid secret")
 
+    # SCRAPE QUIZ PAGE
     scraped = scrape_quiz_page(req.url)
+    qtext = scraped.get("question_text", "") or ""
 
-    # NEW: Call the solver
-    answer = basic_solver(scraped)
+    # DETECT TYPE
+    qtype = detect_question_type(qtext)
+
+    # SOLVE BASED ON TYPE
+    if qtype == "file":
+        answer = solve_file_question(scraped)
+
+    elif qtype == "text":
+        answer = solve_text_question(scraped)
+
+    elif qtype == "demo":
+        answer = {
+            "answer": "demo detected",
+            "reason": "simple demo page"
+        }
+
+    else:
+        answer = {
+            "answer": "Could not detect question type",
+            "reason": "unknown question"
+        }
+
+    # SUBMIT THE ANSWER (IF POSSIBLE)
+    if scraped.get("submit_url"):
+        submit_result = submit_quiz(
+            scraped["submit_url"],
+            email=req.email,
+            secret=req.secret,
+            answer=answer["answer"]
+        )
+    else:
+        submit_result = "No submit URL found"
 
     return {
-    "email": req.email,
-    "secret": req.secret,
-    "scraped_data": scraped,
-    "computed_answer": answer,   # <-- return solver result
-    "question_type": answer.get("question_type", "unknown")
-}
-
-
-
+        "email": req.email,
+        "question_type": qtype,
+        "scraped_data": scraped,
+        "computed_answer": answer,
+        "submit_result": submit_result
+    }
