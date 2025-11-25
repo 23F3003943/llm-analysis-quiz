@@ -115,10 +115,10 @@ def solve_quiz(req: SolveRequest):
     answer = basic_solver(scraped)
 
     return {
-        "email": req.email,
-        "secret": req.secret,
-        "scraped_data": scraped,
-        "computed_answer": answer
-    }
+    "email": req.email,
+    "secret": req.secret,
+    "scraped_data": scraped,
+    "question_type": qtype
+}
 
 
