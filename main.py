@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from scraper import scrape_quiz_page
+from scraper import scrape_quiz_page  # async playwright scraper
 
 # Import solvers
 from solver.file_solver import solve_file_question
@@ -77,16 +77,16 @@ def detect_question_type(text: str):
 
 
 # -------------------------
-# SOLVE ENDPOINT
+# SOLVE ENDPOINT (ASYNC)
 # -------------------------
 @app.post("/solve")
-def solve_quiz(req: SolveRequest):
+async def solve_quiz(req: SolveRequest):
 
     if req.secret != SECRET_VALUE:
         raise HTTPException(status_code=403, detail="Invalid secret")
 
-    # SCRAPE PAGE
-    scraped = scrape_quiz_page(req.url)
+    # SCRAPE PAGE (async Playwright)
+    scraped = await scrape_quiz_page(req.url)
     qtext = scraped.get("question_text", "") or ""
 
     # DETECT TYPE
@@ -111,15 +111,15 @@ def solve_quiz(req: SolveRequest):
             "reason": "unknown question"
         }
 
-    # SUBMIT ANSWER (IF POSSIBLE)
+    # SUBMIT ANSWER IF POSSIBLE
     if scraped.get("submit_url"):
         submit_result = submit_quiz(
-        scraped=scraped,          # pass the whole scraped dict
-        email=req.email,
-        secret=req.secret,
-        page_url=req.url,
-        try_now=True
-       )
+            scraped=scraped,         
+            email=req.email,
+            secret=req.secret,
+            page_url=req.url,
+            try_now=True
+        )
     else:
         submit_result = "No submit URL found"
 
