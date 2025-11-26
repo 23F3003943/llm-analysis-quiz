@@ -5,14 +5,11 @@ import requests
 
 DEFAULT_TIMEOUT = 20
 
-def make_payload(email: str, secret: str, answer):
-    """
-    Build the JSON payload expected by the quiz submit endpoints.
-    'answer' can be a number, string, dict or a file's base64 URI string.
-    """
+def make_payload(email: str, secret: str, url: str, answer):
     return {
         "email": email,
         "secret": secret,
+        "url": url,
         "answer": answer
     }
 
@@ -84,7 +81,7 @@ def submit_quiz(scraped: dict, email: str, secret: str, page_url: str = None, tr
     submit_url_raw = scraped.get("submit_url")
     final_submit_url = normalize_submit_url(submit_url_raw, page_url)
     answer = auto_determine_answer(scraped)
-    payload = make_payload(email, secret, answer)
+    payload = make_payload(email, secret, page_url, answer)
 
     if not try_now or not final_submit_url:
         return {
