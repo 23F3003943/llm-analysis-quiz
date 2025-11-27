@@ -1,13 +1,9 @@
-﻿FROM mcr.microsoft.com/playwright/python:latest
+﻿FROM mcr.microsoft.com/playwright/python:v1.44.0-focal
 
 WORKDIR /app
 
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Force install matching browser versions
-RUN playwright install --with-deps chromium
 
 COPY . .
 

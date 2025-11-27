@@ -125,25 +125,42 @@ def compute_answer(qtype, scraped):
 @app.post("/solve")
 async def solve_quiz(req: SolveRequest):
 
-    # Secret validation
     if req.secret != SECRET_VALUE:
         raise HTTPException(status_code=403, detail="Invalid secret")
 
-    # SCRAPE (Playwright)
+    # Use async Playwright scraper
     scraped = await scrape_quiz_page(req.url)
-    qtype = classify_question(scraped)
+    qtext = scraped.get("question_text", "") or ""
 
-    # COMPUTE ANSWER
-    answer = compute_answer(qtype, scraped)
+    qtype = detect_question_type(qtext)
 
-    # SUBMIT ANSWER (if URL detected)
+    # Solve
+    if qtype == "file":
+        answer = solve_file_question(scraped)
+
+    elif qtype == "text":
+        answer = solve_text_question(scraped)
+
+    elif qtype == "demo":
+        answer = {
+            "answer": "demo detected",
+            "reason": "simple demo page"
+        }
+
+    else:
+        answer = {
+            "answer": "Unable to classify",
+            "reason": "fallback text"
+        }
+
+    # Submit if possible
     if scraped.get("submit_url"):
         submit_result = submit_quiz(
             scraped=scraped,
             email=req.email,
             secret=req.secret,
             page_url=req.url,
-            try_now=True
+            try_now=True,
         )
     else:
         submit_result = "No submit URL found"
