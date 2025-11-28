@@ -5,37 +5,47 @@ import re
 
 
 async def scrape_quiz_page(url: str):
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page()
 
-        await page.goto(url, wait_until="domcontentloaded")
+        # Helpful console debugging
+        page.on("console", lambda msg: print("PAGE LOG:", msg.text()))
 
-        # Instead of wait_for_timeout (broken), use asyncio.sleep
-        await asyncio.sleep(1.2)
+        # Load full page
+        await page.goto(url, wait_until="networkidle")
 
-        body_text = await page.inner_text("body")
+        # WAIT properly for demo-v2 JS
+        await page.wait_for_load_state("networkidle")
+        await asyncio.sleep(3)       # <-- critical
+
+        # Extract main text
+        try:
+            body_text = await page.inner_text("body")
+        except:
+            body_text = ""
+
         submit_url = None
         file_links = []
-
-        frames = page.frames
         full_text = body_text
 
-        for frame in frames:
+        # Iterate iframes
+        for frame in page.frames:
             try:
                 html = await frame.content()
                 text = await frame.inner_text("body")
                 full_text += "\n" + text
 
-                # submit link detection
+                # submit detection
                 if not submit_url:
                     s = extract_submit_url(html, frame.url)
                     if s:
                         submit_url = s
 
-                # detect download links
+                # download links
                 links = await frame.eval_on_selector_all(
-                    "a[href]", "elements => elements.map(e => e.href)"
+                    "a[href]", "els => els.map(e => e.href)"
                 )
                 for l in links:
                     if any(ext in l for ext in ["csv", "pdf", "xlsx", "json"]):
@@ -44,6 +54,7 @@ async def scrape_quiz_page(url: str):
             except:
                 continue
 
+        # fallback in main html
         if not submit_url:
             html = await page.content()
             submit_url = extract_submit_url(html, url)
