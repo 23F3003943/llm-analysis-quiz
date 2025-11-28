@@ -10,9 +10,6 @@ async def scrape_quiz_page(url: str):
         browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page()
 
-        # Helpful console debugging
-        page.on("console", lambda msg: print("PAGE LOG:", msg.text()))
-
         # Load full page
         await page.goto(url, wait_until="networkidle")
 
