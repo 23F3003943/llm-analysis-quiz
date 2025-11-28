@@ -9,7 +9,7 @@ import re
 
 async def scrape_quiz_page(url: str):
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        browser = await pw.firefox.launch(headless=True)
         page = await browser.new_page()
 
         # STORE HTML from all network responses
