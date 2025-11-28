@@ -1,50 +1,83 @@
-import re
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+from urllib.parse import urljoin
+import re
 
 
 async def scrape_quiz_page(url: str):
     """
-    Full Playwright scraper. Renders JS, returns question_text, file_links, submit_url.
+    Fully-rendered Playwright scraper.
+    Loads page, executes JS, extracts text, iframe content, submit URL, and file links.
     """
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page()
-
         await page.goto(url, wait_until="networkidle")
 
-        html = await page.content()
-        soup = BeautifulSoup(html, "html.parser")
+        # Extract full visible text
+        body_text = await page.inner_text("body")
 
-        # Extract visible text
-        question_text = soup.get_text("\n").strip()
-
-        # Extract file links
-        file_links = []
-        for a in soup.find_all("a", href=True):
-            href = urljoin(url, a["href"])
-            if any(ext in href for ext in ["csv", "pdf", "xlsx", "json"]):
-                file_links.append(href)
-
-        # Extract submit URL (search entire HTML)
         submit_url = None
-        patterns = [
-            r"https://tds-llm-analysis\.s-anand\.net/submit\S*",
-            r"/submit"
-        ]
-        for p in patterns:
-            match = re.search(p, html)
-            if match:
-                raw = match.group(0)
-                submit_url = urljoin(url, raw.split("<")[0])
-                break
+        file_links = []
+
+        # Look for <iframe> tags
+        frames = page.frames
+
+        full_text = body_text
+
+        for frame in frames:
+            try:
+                html = await frame.content()
+                text = await frame.inner_text("body")
+                full_text += "\n" + text
+
+                # detect submit URL
+                if not submit_url:
+                    s = extract_submit_url(html, frame.url)
+                    if s:
+                        submit_url = s
+
+                # detect download links
+                links = await frame.eval_on_selector_all(
+                    "a[href]", "elements => elements.map(e => e.href)"
+                )
+                for l in links:
+                    if any(ext in l for ext in ["csv", "pdf", "xlsx", "json"]):
+                        file_links.append(l)
+
+            except:
+                continue
+
+        # Fallback detection in main page HTML
+        if not submit_url:
+            html = await page.content()
+            submit_url = extract_submit_url(html, url)
 
         await browser.close()
 
         return {
-            "question_text": question_text,
+            "question_text": full_text[:8000],
             "file_links": file_links,
             "submit_url": submit_url
         }
+
+
+def extract_submit_url(html: str, base_url: str):
+    """
+    Extract submit URLs from iframe or main HTML.
+    """
+    patterns = [
+        r'https://tds-llm-analysis\.s-anand\.net/submit\S*',
+        r'"submit"\s*:\s*"([^"]+)"',
+        r"'submit'\s*:\s*'([^']+)'",
+        r'POST this JSON to\s+(\/submit)'
+    ]
+
+    for p in patterns:
+        m = re.search(p, html)
+        if m:
+            url = m.group(1) if m.groups() else m.group(0)
+            clean = url.split("<")[0].strip()
+            return urljoin(base_url, clean)
+
+    return None
