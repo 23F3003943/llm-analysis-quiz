@@ -1,100 +1,87 @@
 from playwright.async_api import async_playwright
 from urllib.parse import urljoin
-import asyncio
 import re
-
 
 async def scrape_quiz_page(url: str):
     """
-    Fully working Playwright scraper that:
-    - waits for JS
-    - waits for dynamic quiz text to load
-    - extracts text from body + iframes
-    - finds submit URL
-    - finds downloadable files
+    Fully-rendered scraper with JS execution + iframe extraction.
     """
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page()
 
-        # Load the page
-        await page.goto(url, wait_until="domcontentloaded")
+        # Capture JS console logs (debug)
+        page.on("console", lambda msg: print("PAGE LOG:", msg.text()))
 
-        # 🔥 WAIT for dynamic JavaScript content to appear (up to 5 sec)
+        # Go to page & wait for JS
+        await page.goto(url, wait_until="networkidle")
+        await page.wait_for_timeout(1500)  # let JS finish
+
+        # Extract full text of main page
         try:
-            await page.wait_for_selector("#result, pre, body", timeout=5000)
+            full_text = await page.inner_text("body")
         except:
-            pass  # even if it fails, we still extract
+            full_text = ""
 
-        # Give JS extra time for rendering
-        await asyncio.sleep(1.5)
+        html_main = await page.content()
 
-        # Extract visible text
-        try:
-            body_text = await page.inner_text("body")
-        except:
-            body_text = ""
+        submit_url = extract_submit_url(html_main, url)
+        file_links = extract_file_links(page)
 
-        submit_url = None
-        file_links = []
-        full_text = body_text or ""
-
-        # ---------------------------------------
-        # 🔥 Extract iframe content if present
-        # ---------------------------------------
+        # Extract from iframes too
         for frame in page.frames:
             try:
-                html = await frame.content()
+                frame_text = await frame.inner_text("body")
+                full_text += "\n" + frame_text
 
-                try:
-                    text = await frame.inner_text("body")
-                except:
-                    text = ""
-                full_text += "\n" + text
-
-                # Try extracting submit URL
+                frame_html = await frame.content()
                 if not submit_url:
-                    s = extract_submit_url(html, frame.url)
-                    if s:
-                        submit_url = s
+                    submit_url = extract_submit_url(frame_html, frame.url)
 
-                # Scan links inside iframe
                 links = await frame.eval_on_selector_all(
-                    "a[href]", "els => els.map(e => e.href)"
+                    "a[href]",
+                    "els => els.map(e => e.href)"
                 )
-                for l in links:
-                    if any(ext in l for ext in ["csv", "pdf", "xlsx", "json"]):
-                        file_links.append(l)
+
+                for link in links:
+                    if any(ext in link for ext in ["csv", "pdf", "xlsx", "json"]):
+                        file_links.append(link)
 
             except:
                 continue
-
-        # ---------------------------------------
-        # Fallback: scan main page HTML
-        # ---------------------------------------
-        if not submit_url:
-            html = await page.content()
-            submit_url = extract_submit_url(html, url)
 
         await browser.close()
 
         return {
             "question_text": full_text.strip()[:8000],
-            "file_links": file_links,
+            "file_links": list(set(file_links)),
             "submit_url": submit_url
         }
 
 
+def extract_file_links(page):
+    """Extract all CSV / PDF / XLSX links from main page."""
+    async def _extract():
+        links = await page.eval_on_selector_all(
+            "a[href]",
+            "els => els.map(e => e.href)"
+        )
+        return [l for l in links if any(ext in l for ext in ["csv", "pdf", "xlsx", "json"])]
+    try:
+        return page.context.loop.run_until_complete(_extract())
+    except:
+        return []
+
+
 def extract_submit_url(html: str, base_url: str):
-    """
-    Extract submit URLs from main or iframe HTML.
-    """
+    """Find quiz submit url."""
     patterns = [
         r'https://tds-llm-analysis\.s-anand\.net/submit\S*',
         r'"submit"\s*:\s*"([^"]+)"',
         r"'submit'\s*:\s*'([^']+)'",
-        r'POST this JSON to\s+(\/submit)'
+        r'POST this JSON to\s+(https?://[^\s"<]+)',
+        r'action="([^"]*submit[^"]*)"'
     ]
 
     for p in patterns:
