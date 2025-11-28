@@ -14,7 +14,7 @@ async def scrape_quiz_page(url: str):
 
         # Capture console logs (important for multistep-demo-v2)
         console_messages = []
-        page.on("console", lambda msg: console_messages.append(msg.text()))
+        page.on("console", lambda msg: console_messages.append(str(msg)))
 
         # Load the page
         await page.goto(url, wait_until="domcontentloaded")
