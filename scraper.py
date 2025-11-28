@@ -4,7 +4,7 @@ import asyncio
 import re
 
 # ======================================================
-# FINAL SCRAPER — FULLY COMPATIBLE WITH ALL QUIZ TYPES
+# FINAL MAX-COMPAT SCRAPER (NETWORK + IFRAME + JS)
 # ======================================================
 
 async def scrape_quiz_page(url: str):
@@ -12,131 +12,114 @@ async def scrape_quiz_page(url: str):
         browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page()
 
-        # Capture console logs (important for multistep-demo-v2)
-        console_messages = []
-        page.on("console", lambda msg: console_messages.append(str(msg)))
+        # STORE HTML from all network responses
+        network_html = []
 
-        # Load the page
-        await page.goto(url, wait_until="domcontentloaded")
+        page.on("response", lambda resp: asyncio.create_task(capture_response(resp, network_html)))
 
-        # Allow JS to fully render
-        await page.wait_for_load_state("networkidle")
-        await asyncio.sleep(1.5)
+        await page.goto(url, wait_until="networkidle")
+        await asyncio.sleep(2)
 
-        # -------- Extract main visible text --------
+        full_text = ""
+
+        # DOM TEXT ---------------------------------------
         try:
-            body_text = await page.inner_text("body")
+            t1 = await page.inner_text("body")
+            if t1:
+                full_text += t1.strip() + "\n"
         except:
-            body_text = ""
+            pass
 
-        full_text = body_text.strip()
+        try:
+            t2 = await page.evaluate("() => document.body.innerText")
+            if t2:
+                full_text += t2.strip() + "\n"
+        except:
+            pass
 
-        submit_url = None
-        file_links = []
+        # SHADOW DOM TEXT ---------------------------------------
+        try:
+            shadow_txt = await page.evaluate("""
+                () => {
+                    function getAllText(node) {
+                        let out = "";
+                        function walk(n) {
+                            if (!n) return;
+                            if (n.nodeType === Node.TEXT_NODE) out += n.textContent + "\\n";
+                            if (n.shadowRoot) walk(n.shadowRoot);
+                            for (const c of n.childNodes) walk(c);
+                        }
+                        walk(node);
+                        return out;
+                    }
+                    return getAllText(document.body);
+                }
+            """)
+            if shadow_txt:
+                full_text += shadow_txt.strip() + "\n"
+        except:
+            pass
 
-        # ======================================================
-        # HANDLE IFRAMES
-        # ======================================================
-
-        # Wait for iframes to load
-        for _ in range(10):
-            if len(page.frames) > 1:
-                break
-            await asyncio.sleep(0.2)
-
+        # IFRAMES ---------------------------------------
         for frame in page.frames:
             try:
-                # Try reading text from iframe via normal Playwright call
-                try:
-                    frame_text = await frame.inner_text("body")
-                except:
-                    frame_text = ""
-
-                # If empty → try JS extraction (works for blocked/cross-origin)
-                if not (frame_text or "").strip():
-                    try:
-                        frame_text = await frame.evaluate(
-                            "() => document.body && document.body.innerText"
-                        )
-                    except:
-                        pass
-
-                # If still empty → fallback to HTML → strip tags
-                if not (frame_text or "").strip():
-                    try:
-                        html_dump = await frame.evaluate(
-                            "() => document.body && document.body.innerHTML"
-                        )
-                        if html_dump:
-                            frame_text = re.sub(r"<[^>]+>", "", html_dump)
-                        else:
-                            frame_text = ""
-                    except:
-                        frame_text = ""
-
-                # Append clean iframe text
-                text_clean = (frame_text or "").strip()
-                if text_clean:
-                    full_text += "\n" + text_clean
-
-                # ---------- Detect submit URL in iframe ----------
-                try:
-                    frame_html = await frame.content()
-                except:
-                    frame_html = ""
-
-                if not submit_url:
-                    s = extract_submit_url(frame_html, frame.url)
-                    if s:
-                        submit_url = s
-
-                # ---------- Detect file download links ----------
-                try:
-                    links = await frame.eval_on_selector_all(
-                        "a[href]", "els => els.map(e => e.href)"
-                    )
-                    for l in links:
-                        if any(ext in l for ext in ["csv", "pdf", "xlsx", "json"]):
-                            file_links.append(l)
-                except:
-                    pass
-
-            except:
-                continue
-
-        # ======================================================
-        # FALLBACK: CHECK MAIN PAGE HTML FOR SUBMIT URL
-        # ======================================================
-        if not submit_url:
-            try:
-                html = await page.content()
-                submit_url = extract_submit_url(html, url)
+                ftxt = await frame.evaluate("() => document.body.innerText")
+                if ftxt:
+                    full_text += ftxt.strip() + "\n"
             except:
                 pass
 
-        # ======================================================
-        # Include console log messages (VERY IMPORTANT)
-        # ======================================================
-        if console_messages:
-            full_text += "\n" + "\n".join(console_messages)
+        # NETWORK HTML ---------------------------------------
+        for html in network_html:
+            text_only = clean_html(html)
+            if text_only.strip():
+                full_text += text_only.strip() + "\n"
+
+        # SUBMIT URL ---------------------------------------
+        submit_url = extract_submit_url_from_all(full_text, network_html, url)
 
         await browser.close()
 
         return {
-            "question_text": full_text[:8000],  # safe limit
-            "file_links": file_links,
+            "question_text": full_text[:8000].strip(),
+            "file_links": extract_file_links(network_html),
             "submit_url": submit_url
         }
 
 
 # ======================================================
-# SUBMIT URL EXTRACTION
+# CAPTURE NETWORK RESPONSES
 # ======================================================
-def extract_submit_url(html: str, base_url: str):
-    if not html:
-        return None
 
-    # Several patterns used by TDS pages
+async def capture_response(resp, bucket):
+    try:
+        ct = resp.headers.get("content-type", "")
+        if "text/html" in ct:
+            body = await resp.text()
+            if body:
+                bucket.append(body)
+    except:
+        pass
+
+
+# ======================================================
+# CLEAN HTML → TEXT
+# ======================================================
+
+def clean_html(html: str):
+    if not html:
+        return ""
+    text = re.sub(r"<script.*?>.*?</script>", "", html, flags=re.S)
+    text = re.sub(r"<style.*?>.*?</style>", "", text, flags=re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text)
+
+
+# ======================================================
+# EXTRACT SUBMIT URL
+# ======================================================
+
+def extract_submit_url_from_all(full_text: str, html_list, base_url: str):
     patterns = [
         r'https://tds-llm-analysis\.s-anand\.net/submit\S*',
         r'"submit"\s*:\s*"([^"]+)"',
@@ -145,16 +128,30 @@ def extract_submit_url(html: str, base_url: str):
         r'POST this JSON to\s+(\/submit\S*)'
     ]
 
-    for p in patterns:
-        m = re.search(p, html)
-        if m:
-            # Get the URL
-            candidate = m.group(1) if m.groups() else m.group(0)
+    # search in combined text
+    text_sources = [full_text] + html_list
 
-            # Clean HTML noise
-            clean = candidate.split("<")[0].strip()
-
-            # Join relative paths if needed
-            return urljoin(base_url, clean)
+    for src in text_sources:
+        if not src:
+            continue
+        for p in patterns:
+            m = re.search(p, src)
+            if m:
+                candidate = m.group(1) if m.groups() else m.group(0)
+                return urljoin(base_url, candidate.strip())
 
     return None
+
+
+# ======================================================
+# EXTRACT FILE LINKS
+# ======================================================
+
+def extract_file_links(html_list):
+    links = []
+    for html in html_list:
+        found = re.findall(r'href="([^"]+)"', html)
+        for l in found:
+            if any(ext in l for ext in ["csv", "pdf", "xlsx", "json"]):
+                links.append(l)
+    return links
